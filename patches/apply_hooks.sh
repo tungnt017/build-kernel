@@ -29,17 +29,14 @@ insert_hook() {
     }
     ' "$FILE" > "$TMP"
     if [ -s "$TMP" ]; then mv "$TMP" "$FILE"; echo "  ✅ $DESC"
-    else echo "  ❌ $DESC — awk produced empty output!"; rm -f "$TMP"; return 1; fi
+    else echo "  ❌ $DESC — failed"; rm -f "$TMP"; return 1; fi
 }
 
 echo ""
 echo "═══════════════════════════════════════════════════════"
-echo "🪝 Applying ReSukiSU manual hooks via awk"
+echo "🪝 Applying ReSukiSU manual hooks"
 echo "═══════════════════════════════════════════════════════"
 
-# ──────────────────────────────────────────────────
-# 1. fs/stat.c
-# ──────────────────────────────────────────────────
 echo ""
 echo "📄 fs/stat.c"
 insert_hook "fs/stat.c" "stat: extern declarations" "#if !defined(__ARCH_WANT_STAT64)" "#if !defined(__ARCH_WANT_STAT64)" "before" \
@@ -53,7 +50,7 @@ extern void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **sta
 #endif
 #endif
 '
-insert_hook "fs/stat.c" "stat: hook in newfstatat" "SYSCALL_DEFINE4(newfstatat," "int error;" "after" \
+insert_hook "fs/stat.c" "stat: hook newfstatat" "SYSCALL_DEFINE4(newfstatat," "int error;" "after" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 	ksu_handle_stat(&dfd, &filename, &flag);
 #endif'
@@ -61,7 +58,7 @@ insert_hook "fs/stat.c" "stat: hook newfstat_ret" "SYSCALL_DEFINE2(newfstat," "r
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 	ksu_handle_newfstat_ret(&fd, &statbuf);
 #endif'
-insert_hook "fs/stat.c" "stat: hook in fstatat64" "SYSCALL_DEFINE4(fstatat64," "int error;" "after" \
+insert_hook "fs/stat.c" "stat: hook fstatat64" "SYSCALL_DEFINE4(fstatat64," "int error;" "after" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 	ksu_handle_stat(&dfd, &filename, &flag);
 #endif'
@@ -70,66 +67,57 @@ insert_hook "fs/stat.c" "stat: hook fstat64_ret" "SYSCALL_DEFINE2(fstat64," "ret
 	ksu_handle_fstat64_ret(&fd, &statbuf);
 #endif'
 
-# ──────────────────────────────────────────────────
-# 2. fs/exec.c
-# ──────────────────────────────────────────────────
 echo ""
 echo "📄 fs/exec.c"
-insert_hook "fs/exec.c" "execve: extern declaration" "int do_execve(" "int do_execve(" "before" \
+insert_hook "fs/exec.c" "execve: extern" "int do_execve(" "int do_execve(" "before" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 __attribute__((hot))
 extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
 				void *argv, void *envp, int *flags);
 #endif
 '
-insert_hook "fs/exec.c" "execve: hook in do_execve" "int do_execve(" "struct user_arg_ptr envp" "after" \
+insert_hook "fs/exec.c" "execve: do_execve" "int do_execve(" "struct user_arg_ptr envp" "after" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 	ksu_handle_execveat((int *)AT_FDCWD, &filename, &argv, &envp, 0);
 #endif'
-insert_hook "fs/exec.c" "execve: hook in compat_do_execve" "compat_do_execve(" "return do_execveat_common" "before" \
+insert_hook "fs/exec.c" "execve: compat" "compat_do_execve(" "return do_execveat_common" "before" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 	ksu_handle_execveat((int *)AT_FDCWD, &filename, &argv, &envp, 0);
 #endif'
 
-# ──────────────────────────────────────────────────
-# 3. fs/open.c
-# ──────────────────────────────────────────────────
 echo ""
 echo "📄 fs/open.c"
-insert_hook "fs/open.c" "faccessat: extern declaration" "SYSCALL_DEFINE3(faccessat," "SYSCALL_DEFINE3(faccessat," "before" \
+insert_hook "fs/open.c" "faccessat: extern" "SYSCALL_DEFINE3(faccessat," "SYSCALL_DEFINE3(faccessat," "before" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 __attribute__((hot))
 extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
 				int *mode, int *flags);
 #endif
 '
-insert_hook "fs/open.c" "faccessat: hook call" "SYSCALL_DEFINE3(faccessat," "return do_faccessat" "before" \
+insert_hook "fs/open.c" "faccessat: hook" "SYSCALL_DEFINE3(faccessat," "return do_faccessat" "before" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
 #endif'
 
-# ──────────────────────────────────────────────────
-# 4. kernel/reboot.c
-# ──────────────────────────────────────────────────
 echo ""
 echo "📄 kernel/reboot.c"
-insert_hook "kernel/reboot.c" "reboot: extern declaration" "SYSCALL_DEFINE4(reboot," "SYSCALL_DEFINE4(reboot," "before" \
+insert_hook "kernel/reboot.c" "reboot: extern" "SYSCALL_DEFINE4(reboot," "SYSCALL_DEFINE4(reboot," "before" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
 #endif
 '
-insert_hook "kernel/reboot.c" "reboot: hook call" "SYSCALL_DEFINE4(reboot," "int ret = 0;" "after" \
+insert_hook "kernel/reboot.c" "reboot: hook" "SYSCALL_DEFINE4(reboot," "int ret = 0;" "after" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
 #endif'
 
 # ──────────────────────────────────────────────────
-# 5. fs/namespace.c — path_umount backport (REQUIRED)
+# REQUIRED: path_umount backport + EXPORT_SYMBOL
 # ──────────────────────────────────────────────────
 echo ""
 echo "📄 fs/namespace.c (path_umount — REQUIRED)"
 if ! grep -q "int path_umount" "fs/namespace.c" 2>/dev/null; then
-    insert_hook "fs/namespace.c" "namespace: path_umount backport" "Now umount can handle mount points" "Now umount can handle mount points" "before" \
+    insert_hook "fs/namespace.c" "path_umount backport" "Now umount can handle mount points" "Now umount can handle mount points" "before" \
 'static int can_umount(const struct path *path, int flags)
 {
 	struct mount *mnt = real_mount(path->mnt);
@@ -162,49 +150,45 @@ int path_umount(struct path *path, int flags)
 EXPORT_SYMBOL(path_umount);
 '
 else
-    echo "  ⏭️  path_umount already exists"
-    # Ensure EXPORT_SYMBOL exists
+    echo "  ⏭️  path_umount function exists"
     if ! grep -q "EXPORT_SYMBOL(path_umount)" "fs/namespace.c"; then
-        sed -i '/^int path_umount/,/^}/ { /^}/ a\EXPORT_SYMBOL(path_umount);
-        }' "fs/namespace.c"
+        # Add EXPORT_SYMBOL after closing brace of path_umount
+        awk 'BEGIN{in_func=0;done=0} /^int path_umount/{in_func=1} in_func&&!done&&/^}/{print;print "EXPORT_SYMBOL(path_umount);";in_func=0;done=1;next} {print}' \
+            "fs/namespace.c" > "fs/namespace.c.tmp" && mv "fs/namespace.c.tmp" "fs/namespace.c"
         echo "  ✅ Added EXPORT_SYMBOL(path_umount)"
     fi
 fi
 
-# ──────────────────────────────────────────────────
-# 6. Optional: input hook only
-# ──────────────────────────────────────────────────
+# Optional: input hook
 if [ "$OPTIONAL" = true ]; then
     echo ""
     echo "📄 drivers/input/input.c (optional)"
-    insert_hook "drivers/input/input.c" "input: extern declarations" "void input_event(" "void input_event(" "before" \
+    insert_hook "drivers/input/input.c" "input: extern" "void input_event(" "void input_event(" "before" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 extern bool ksu_input_hook __read_mostly;
 extern __attribute__((cold)) int ksu_handle_input_handle_event(
 			unsigned int *type, unsigned int *code, int *value);
 #endif
 '
-    insert_hook "drivers/input/input.c" "input: hook call" "void input_event(" "unsigned long flags;" "after" \
+    insert_hook "drivers/input/input.c" "input: hook" "void input_event(" "unsigned long flags;" "after" \
 '#ifdef CONFIG_KSU_MANUAL_HOOK
 	if (unlikely(ksu_input_hook))
 		ksu_handle_input_handle_event(&type, &code, &value);
 #endif'
 fi
 
-# ──────────────────────────────────────────────────
-# VERIFICATION
-# ──────────────────────────────────────────────────
+# VERIFY
 echo ""
 echo "═══════════════════════════════════════════════════════"
-echo "🔍 Verifying all hooks..."
+echo "🔍 Verifying hooks..."
 echo "═══════════════════════════════════════════════════════"
 ALL_OK=true
 check_hook() {
     local FILE="$1" FUNC="$2"
     local count
     count=$(grep -c "$FUNC" "$FILE" 2>/dev/null || echo "0")
-    if [ "$count" -ge 2 ]; then echo "  ✅ $FILE — $FUNC ($count occurrences)"
-    elif [ "$count" -eq 1 ]; then echo "  ⚠️  $FILE — $FUNC (1 occurrence)"
+    if [ "$count" -ge 2 ]; then echo "  ✅ $FILE — $FUNC ($count)"
+    elif [ "$count" -eq 1 ]; then echo "  ⚠️  $FILE — $FUNC (1)"
     else echo "  ❌ $FILE — $FUNC NOT FOUND!"; ALL_OK=false; fi
 }
 check_hook "fs/stat.c"       "ksu_handle_stat"
@@ -219,5 +203,5 @@ if [ "$OPTIONAL" = true ]; then
     check_hook "drivers/input/input.c" "ksu_handle_input_handle_event"
 fi
 echo ""
-if [ "$ALL_OK" = true ]; then echo "✅ All hooks verified successfully!"
+if [ "$ALL_OK" = true ]; then echo "✅ All hooks verified!"
 else echo "❌ Some hooks failed!"; exit 1; fi
