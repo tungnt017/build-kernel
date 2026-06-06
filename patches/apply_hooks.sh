@@ -65,7 +65,6 @@ echo "════════════════════════�
 echo ""
 echo "📄 fs/stat.c"
 
-# 1a. Extern declarations
 insert_hook "fs/stat.c" \
     "stat: extern declarations" \
     "#if !defined(__ARCH_WANT_STAT64)" \
@@ -82,7 +81,6 @@ extern void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **sta
 #endif
 '
 
-# 1b. Hook in SYSCALL_DEFINE4(newfstatat) — after "int error;"
 insert_hook "fs/stat.c" \
     "stat: hook in newfstatat" \
     "SYSCALL_DEFINE4(newfstatat," \
@@ -92,7 +90,6 @@ insert_hook "fs/stat.c" \
 	ksu_handle_stat(&dfd, &filename, &flag);
 #endif'
 
-# 1c. Hook in SYSCALL_DEFINE2(newfstat) — before "return error;"
 insert_hook "fs/stat.c" \
     "stat: hook newfstat_ret" \
     "SYSCALL_DEFINE2(newfstat," \
@@ -102,7 +99,6 @@ insert_hook "fs/stat.c" \
 	ksu_handle_newfstat_ret(&fd, &statbuf);
 #endif'
 
-# 1d. Hook in SYSCALL_DEFINE4(fstatat64) — after "int error;"
 insert_hook "fs/stat.c" \
     "stat: hook in fstatat64" \
     "SYSCALL_DEFINE4(fstatat64," \
@@ -112,7 +108,6 @@ insert_hook "fs/stat.c" \
 	ksu_handle_stat(&dfd, &filename, &flag);
 #endif'
 
-# 1e. Hook in SYSCALL_DEFINE2(fstat64) — before "return error;"
 insert_hook "fs/stat.c" \
     "stat: hook fstat64_ret" \
     "SYSCALL_DEFINE2(fstat64," \
@@ -128,7 +123,6 @@ insert_hook "fs/stat.c" \
 echo ""
 echo "📄 fs/exec.c"
 
-# 2a. Extern declaration — before "int do_execve("
 insert_hook "fs/exec.c" \
     "execve: extern declaration" \
     "int do_execve(" \
@@ -141,7 +135,6 @@ extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
 #endif
 '
 
-# 2b. Hook in do_execve — after "struct user_arg_ptr envp"
 insert_hook "fs/exec.c" \
     "execve: hook in do_execve" \
     "int do_execve(" \
@@ -151,7 +144,6 @@ insert_hook "fs/exec.c" \
 	ksu_handle_execveat((int *)AT_FDCWD, &filename, &argv, &envp, 0);
 #endif'
 
-# 2c. Hook in compat_do_execve — before "return do_execveat_common"
 insert_hook "fs/exec.c" \
     "execve: hook in compat_do_execve" \
     "compat_do_execve(" \
@@ -167,7 +159,6 @@ insert_hook "fs/exec.c" \
 echo ""
 echo "📄 fs/open.c"
 
-# 3a. Extern declaration — before SYSCALL_DEFINE3(faccessat
 insert_hook "fs/open.c" \
     "faccessat: extern declaration" \
     "SYSCALL_DEFINE3(faccessat," \
@@ -180,7 +171,6 @@ extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
 #endif
 '
 
-# 3b. Hook call — before "return do_faccessat"
 insert_hook "fs/open.c" \
     "faccessat: hook call" \
     "SYSCALL_DEFINE3(faccessat," \
@@ -196,7 +186,6 @@ insert_hook "fs/open.c" \
 echo ""
 echo "📄 kernel/reboot.c"
 
-# 4a. Extern declaration — before SYSCALL_DEFINE4(reboot,
 insert_hook "kernel/reboot.c" \
     "reboot: extern declaration" \
     "SYSCALL_DEFINE4(reboot," \
@@ -207,7 +196,6 @@ extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void 
 #endif
 '
 
-# 4b. Hook call — after "int ret = 0;"
 insert_hook "kernel/reboot.c" \
     "reboot: hook call" \
     "SYSCALL_DEFINE4(reboot," \
