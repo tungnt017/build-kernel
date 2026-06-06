@@ -245,6 +245,17 @@ jobs:
               grep -q "Wno-array-parameter" "$QCACLD_MK" || \
                 echo "ccflags-y += -Wno-array-parameter" >> "$QCACLD_MK"
           fi
+          # Fix 8: Export write_op (remove 'static' from selinuxfs.c)
+          SELINUXFS="security/selinux/selinuxfs.c"
+          if [ -f "$SELINUXFS" ]; then
+              sed -i 's/static const struct seq_operations sel_avc_cache_stats_seq_ops/const struct seq_operations sel_avc_cache_stats_seq_ops/' "$SELINUXFS" 2>/dev/null
+              # Export write_op - remove static keyword
+              sed -i 's/^static ssize_t sel_write_op/ssize_t sel_write_op/' "$SELINUXFS"
+              sed -i 's/^static const struct file_operations transaction_ops/const struct file_operations transaction_ops/' "$SELINUXFS"
+          fi
+          
+          # Fix 9: Backport path_umount (already in apply_hooks.sh optional patches)
+          # OR: run apply_hooks.sh with --optional flag to include path_umount backport
 
           echo ""
           echo "All build fixes applied!"
