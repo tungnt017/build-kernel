@@ -73,7 +73,7 @@ jobs:
           chmod +x antman
           ./antman -S
           ./antman --patch=glibc || true
-          echo "✅ Neutron Clang installed"
+          echo "Neutron Clang installed"
           bin/clang --version 2>/dev/null | head -3 || true
 
       - name: Setup Proton Clang
@@ -107,7 +107,7 @@ jobs:
           cd $GITHUB_WORKSPACE/kernel
           KVER=$(make kernelversion 2>/dev/null || echo "5.4.x")
           echo "KERNEL_VERSION=$KVER" >> $GITHUB_ENV
-          echo "📦 Kernel version: $KVER"
+          echo "Kernel version: $KVER"
 
       - name: Detect defconfig
         run: |
@@ -115,13 +115,13 @@ jobs:
           CONFIGS_DIR="arch/$ARCH/configs"
           for candidate in lisa_defconfig lisa_stock_defconfig vendor/lisa_defconfig vendor/lahaina-qgki_defconfig; do
             if [ -f "$CONFIGS_DIR/$candidate" ]; then
-              echo "✅ Found: $candidate"
+              echo "Found: $candidate"
               echo "DEFCONFIG=$candidate" >> $GITHUB_ENV
               break
             fi
           done
           if ! grep -q DEFCONFIG "$GITHUB_ENV"; then
-            echo "❌ No defconfig found!"
+            echo "No defconfig found!"
             ls -la "$CONFIGS_DIR/" "$CONFIGS_DIR/vendor/" 2>/dev/null || true
             exit 1
           fi
@@ -132,7 +132,7 @@ jobs:
           curl -LSs \
             "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/${{ inputs.resukisu_branch }}/kernel/setup.sh" \
             | bash -
-          echo "✅ ReSukiSU integrated"
+          echo "ReSukiSU integrated"
 
       - name: Patch defconfig
         run: |
@@ -149,10 +149,10 @@ jobs:
 
           if [ "${{ inputs.use_susfs }}" = "true" ]; then
             echo "CONFIG_KSU_SUSFS=y" >> "$DEFCONFIG_FILE"
-            echo "🛡️ Mode: SUSFS"
+            echo "Mode: SUSFS"
           else
             echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$DEFCONFIG_FILE"
-            echo "🪝 Mode: Manual Hook"
+            echo "Mode: Manual Hook"
           fi
 
       - name: Apply manual hooks
@@ -174,25 +174,25 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/kernel
 
-          echo "🔧 Fixing known Clang build errors..."
+          echo "Fixing known Clang build errors..."
 
-          # ── Fix 1: Export sel_handle_status_ops (ReSukiSU requirement) ──
+          # Fix 1: Export sel_handle_status_ops (ReSukiSU requirement)
           SELINUXFS="security/selinux/selinuxfs.c"
           if [ -f "$SELINUXFS" ]; then
             if grep -q "static const struct file_operations sel_handle_status_ops" "$SELINUXFS"; then
               sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' "$SELINUXFS"
-              echo "  ✅ Fixed: sel_handle_status_ops exported (removed static)"
+              echo "  Fixed: sel_handle_status_ops exported (removed static)"
             else
-              echo "  ⏭️  sel_handle_status_ops: pattern not found or already exported"
+              echo "  sel_handle_status_ops: pattern not found or already exported"
             fi
           fi
 
-          # ── Fix 2: rmnet_ipa.c — enum conversion (direct C cast) ──
+          # Fix 2: rmnet_ipa.c enum conversion (direct C cast)
           RMNET_IPA="techpack/dataipa/drivers/platform/msm/ipa/ipa_v3/rmnet_ipa.c"
           if [ -f "$RMNET_IPA" ]; then
             sed -i 's/q6_ul_flt_rule_ptr->ip = flt_spec_ptr->ip_type;/q6_ul_flt_rule_ptr->ip = (enum ipa_ip_type)flt_spec_ptr->ip_type;/' "$RMNET_IPA"
             sed -i 's/q6_ul_flt_rule_ptr->action = flt_spec_ptr->filter_action;/q6_ul_flt_rule_ptr->action = (enum ipa_flt_action)flt_spec_ptr->filter_action;/' "$RMNET_IPA"
-            echo "  ✅ Fixed: rmnet_ipa.c enum casts"
+            echo "  Fixed: rmnet_ipa.c enum casts"
           fi
 
           # Backup Makefile flag
@@ -201,11 +201,11 @@ jobs:
             grep -q "Wno-enum-conversion" "$DATAIPA_MK" ||               echo "ccflags-y += -Wno-enum-conversion" >> "$DATAIPA_MK"
           fi
 
-          # ── Fix 3: tcp_timer.c — bit-field truncation ──
+          # Fix 3: tcp_timer.c bit-field truncation
           TCP_TIMER="net/ipv4/tcp_timer.c"
           if [ -f "$TCP_TIMER" ]; then
             sed -i 's/icsk->icsk_mtup\.enabled = 1;/icsk->icsk_mtup.enabled = !!1;/g' "$TCP_TIMER"
-            echo "  ✅ Fixed: tcp_timer.c bit-field (!!1)"
+            echo "  Fixed: tcp_timer.c bit-field (!!1)"
           fi
 
           NET_IPV4_MK="net/ipv4/Makefile"
@@ -213,11 +213,11 @@ jobs:
             grep -q "Wno-single-bit-bitfield" "$NET_IPV4_MK" ||               echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$NET_IPV4_MK"
           fi
 
-          # ── Fix 4: sde_hw_dsc_1_2.c — missing return type (-Wimplicit-int) ──
+          # Fix 4: sde_hw_dsc_1_2.c missing return type (-Wimplicit-int)
           DSC_FILE="techpack/display/msm/sde/sde_hw_dsc_1_2.c"
           if [ -f "$DSC_FILE" ]; then
             sed -i 's/static inline _dsc_subblk_offset/static inline int _dsc_subblk_offset/' "$DSC_FILE"
-            echo "  ✅ Fixed: sde_hw_dsc_1_2.c missing return type"
+            echo "  Fixed: sde_hw_dsc_1_2.c missing return type"
           fi
 
           # Fallback: suppress -Wimplicit-int in display techpack
@@ -225,8 +225,15 @@ jobs:
             grep -q "Wno-implicit-int" "$MK" ||               echo "ccflags-y += -Wno-implicit-int" >> "$MK"
           done
 
+          # Fix 5: msm_ion.c enum comparison (-Wenum-compare)
+          ION_HEAPS_MK="drivers/staging/android/ion/heaps/Makefile"
+          if [ -f "$ION_HEAPS_MK" ]; then
+            grep -q "Wno-enum-compare" "$ION_HEAPS_MK" ||               echo "ccflags-y += -Wno-enum-compare" >> "$ION_HEAPS_MK"
+            echo "  Fixed: msm_ion.c enum comparison"
+          fi
+
           echo ""
-          echo "✅ All build fixes applied!"
+          echo "All build fixes applied!"
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1
@@ -254,8 +261,8 @@ jobs:
             O=out
           )
 
-          echo "⚙️  Config: $DEFCONFIG"
-          echo "🔧 Clang: $(clang --version 2>/dev/null | head -1 || echo 'unknown')"
+          echo "Config: $DEFCONFIG"
+          echo "Clang: $(clang --version 2>/dev/null | head -1 || echo 'unknown')"
           make "${MAKE_ARGS[@]}" $DEFCONFIG
 
           # Force KALLSYMS_ALL after defconfig processing
@@ -266,15 +273,15 @@ jobs:
           echo "--- Critical config check ---"
           grep -E "CONFIG_KSU|CONFIG_KALLSYMS_ALL" out/.config || true
 
-          echo "🔨 Building..."
+          echo "Building..."
           make "${MAKE_ARGS[@]}" -j$(nproc --all) 2>&1 | tee build.log
 
           if [ -f out/arch/$ARCH/boot/Image ]; then
-            echo "✅ Build successful!"
+            echo "Build successful!"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
             ls -lh out/arch/$ARCH/boot/Image
           else
-            echo "❌ Build failed!"
+            echo "Build failed!"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
             tail -80 build.log
             exit 1
@@ -309,8 +316,10 @@ jobs:
           AKEOF
 
           cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image .
-          find $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dts             -name "*.dtb" -exec cp {} dtb \; 2>/dev/null || true
-          [ -f "$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dtbo.img" ] &&             cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dtbo.img . || true
+          find $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dts \
+            -name "*.dtb" -exec cp {} dtb \; 2>/dev/null || true
+          [ -f "$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dtbo.img" ] && \
+            cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dtbo.img . || true
 
           DATE=$(date +%Y%m%d-%H%M)
           MODE="${{ inputs.use_susfs == true && 'SUSFS' || 'ManualHook' }}"
@@ -341,7 +350,7 @@ jobs:
           tag_name: v${{ github.run_number }}-lisa
           name: "ReSukiSU Lisa #${{ github.run_number }}"
           body: |
-            ## 📱 ReSukiSU — Xiaomi 11 Lite 5G NE (lisa)
+            ## ReSukiSU — Xiaomi 11 Lite 5G NE (lisa)
             | Item | Detail |
             |---|---|
             | **Kernel** | `${{ env.KERNEL_VERSION }}` |
