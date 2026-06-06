@@ -70,48 +70,24 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/toolchain/clang
           cd $GITHUB_WORKSPACE/toolchain/clang
 
-          # Download antman from correct repo
-          curl -LSs "https://raw.githubusercontent.com/nickyraz/nickyraz.github.io/main/neutron-clang/antman" -o antman
+          # Download antman from official Neutron-Toolchains repo
+          curl -LSs "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman" -o antman
           chmod +x antman
 
-          # Sync latest Neutron Clang
+          # Sync latest Neutron Clang build
           ./antman -S
 
           # Patch for Ubuntu 24.04 glibc compatibility
           ./antman --patch=glibc || true
 
           echo "✅ Neutron Clang installed"
-          ls bin/clang* 2>/dev/null | head -5 || true
           bin/clang --version 2>/dev/null | head -3 || true
-
-      - name: Setup Neutron Clang (fallback)
-        if: ${{ inputs.clang_version == 'neutron' && failure() }}
-        run: |
-          echo "⚠️  antman failed, trying direct tarball download..."
-          mkdir -p $GITHUB_WORKSPACE/toolchain/clang
-          cd $GITHUB_WORKSPACE/toolchain/clang
-
-          # Direct download from Neutron releases
-          LATEST_URL=$(curl -s https://api.github.com/repos/nickyraz/nickyraz.github.io/releases/latest \
-            | grep "browser_download_url.*neutron-clang.*tar.zst" \
-            | head -1 | cut -d '"' -f 4)
-
-          if [ -n "$LATEST_URL" ]; then
-            wget -q "$LATEST_URL" -O neutron-clang.tar.zst
-            tar -I zstd -xf neutron-clang.tar.zst
-            rm neutron-clang.tar.zst
-            echo "✅ Neutron Clang installed (direct download)"
-          else
-            echo "❌ Could not find Neutron Clang release!"
-            exit 1
-          fi
 
       - name: Setup Proton Clang
         if: ${{ inputs.clang_version == 'proton' }}
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git \
             $GITHUB_WORKSPACE/toolchain/clang
-          echo "✅ Proton Clang installed"
 
       - name: Setup AOSP Clang
         if: ${{ inputs.clang_version == 'aosp' }}
@@ -121,7 +97,6 @@ jobs:
             -O /tmp/clang.tar.gz
           tar -xzf /tmp/clang.tar.gz -C $GITHUB_WORKSPACE/toolchain/clang
           rm /tmp/clang.tar.gz
-          echo "✅ AOSP Clang installed"
 
       - name: Clone GCC toolchains
         run: |
@@ -171,10 +146,12 @@ jobs:
           cd $GITHUB_WORKSPACE/kernel
           DEFCONFIG_FILE="arch/$ARCH/configs/$DEFCONFIG"
           sed -i '/CONFIG_KSU/d' "$DEFCONFIG_FILE"
+          sed -i '/CONFIG_KALLSYMS_ALL/d' "$DEFCONFIG_FILE"
           {
             echo ""
             echo "# ReSukiSU"
             echo "CONFIG_KSU=y"
+            echo "CONFIG_KALLSYMS_ALL=y"
           } >> "$DEFCONFIG_FILE"
 
           if [ "${{ inputs.use_susfs }}" = "true" ]; then
@@ -184,6 +161,9 @@ jobs:
             echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$DEFCONFIG_FILE"
             echo "🪝 Mode: Manual Hook"
           fi
+
+          echo "--- defconfig tail ---"
+          tail -8 "$DEFCONFIG_FILE"
 
       - name: Apply manual hooks
         if: ${{ inputs.use_susfs != true }}
@@ -196,6 +176,46 @@ jobs:
           else
             bash "$GITHUB_WORKSPACE/patches/apply_hooks.sh"
           fi
+
+      # ══════════════════════════════════════════
+      # Fix known Clang build errors
+      # ══════════════════════════════════════════
+      - name: Fix Clang build warnings/errors
+        run: |
+          cd $GITHUB_WORKSPACE/kernel
+
+          echo "🔧 Fixing known build errors for Clang..."
+
+          # Fix 1: rmnet_ipa.c — enum conversion error in techpack/dataipa
+          DATAIPA_MK="techpack/dataipa/drivers/platform/msm/ipa/ipa_v3/Makefile"
+          if [ -f "$DATAIPA_MK" ]; then
+            if ! grep -q "Wno-enum-conversion" "$DATAIPA_MK"; then
+              echo "ccflags-y += -Wno-enum-conversion" >> "$DATAIPA_MK"
+              echo "  ✅ Fixed: rmnet_ipa enum conversion (-Wno-enum-conversion)"
+            fi
+          fi
+
+          # Fix 2: tcp_timer.c — bit-field truncation in net/ipv4
+          TCP_TIMER="net/ipv4/tcp_timer.c"
+          if [ -f "$TCP_TIMER" ]; then
+            if grep -q "icsk->icsk_mtup.enabled = 1;" "$TCP_TIMER"; then
+              sed -i 's/icsk->icsk_mtup.enabled = 1;/icsk->icsk_mtup.enabled = !!1;/' "$TCP_TIMER"
+              echo "  ✅ Fixed: tcp_timer bit-field truncation (!!1)"
+            fi
+          fi
+
+          # Fix 3: Suppress additional Clang warnings that break -Werror builds
+          # Add global flags if needed
+          NET_IPV4_MK="net/ipv4/Makefile"
+          if [ -f "$NET_IPV4_MK" ]; then
+            if ! grep -q "Wno-single-bit-bitfield-constant-conversion" "$NET_IPV4_MK"; then
+              echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$NET_IPV4_MK"
+              echo "  ✅ Fixed: net/ipv4 bitfield warning suppressed"
+            fi
+          fi
+
+          echo ""
+          echo "✅ All build fixes applied!"
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1
@@ -211,7 +231,6 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # Use system host tools to avoid glibc/ld incompatibility
           MAKE_ARGS=(
             ARCH=$ARCH
             CC="ccache clang"
@@ -238,7 +257,7 @@ jobs:
           else
             echo "❌ Build failed!"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
-            tail -50 build.log
+            tail -80 build.log
             exit 1
           fi
 
