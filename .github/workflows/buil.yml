@@ -232,6 +232,20 @@ jobs:
             echo "  Fixed: msm_ion.c enum comparison"
           fi
 
+          # Fix 6: usbdtp.c bit-field truncation
+          USB_MISC_MK="drivers/usb/misc/Makefile"
+          if [ -f "$USB_MISC_MK" ]; then
+              grep -q "Wno-single-bit-bitfield" "$USB_MISC_MK" || \
+                echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$USB_MISC_MK"
+          fi
+          
+          # Fix 7: parser_api.c array parameter mismatch (qcacld WiFi)
+          QCACLD_MK="drivers/staging/qcacld-3.0/Kbuild"
+          if [ -f "$QCACLD_MK" ]; then
+              grep -q "Wno-array-parameter" "$QCACLD_MK" || \
+                echo "ccflags-y += -Wno-array-parameter" >> "$QCACLD_MK"
+          fi
+
           echo ""
           echo "All build fixes applied!"
 
