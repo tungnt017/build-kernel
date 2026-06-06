@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       apply_optional_hooks:
-        description: "Apply optional hooks (input + path_umount)"
+        description: "Apply optional hooks (input hook)"
         required: false
         type: boolean
         default: false
@@ -61,9 +61,6 @@ jobs:
             schedtool squashfs-tools xsltproc zip zlib1g-dev \
             python3 python-is-python3 lld zstd
 
-      # ══════════════════════════════════════════
-      # Clang Toolchains
-      # ══════════════════════════════════════════
       - name: Setup Neutron Clang
         if: ${{ inputs.clang_version == 'neutron' }}
         run: |
@@ -73,7 +70,6 @@ jobs:
           chmod +x antman
           ./antman -S
           ./antman --patch=glibc || true
-          echo "Neutron Clang installed"
           bin/clang --version 2>/dev/null | head -3 || true
 
       - name: Setup Proton Clang
@@ -107,7 +103,6 @@ jobs:
           cd $GITHUB_WORKSPACE/kernel
           KVER=$(make kernelversion 2>/dev/null || echo "5.4.x")
           echo "KERNEL_VERSION=$KVER" >> $GITHUB_ENV
-          echo "Kernel version: $KVER"
 
       - name: Detect defconfig
         run: |
@@ -115,7 +110,6 @@ jobs:
           CONFIGS_DIR="arch/$ARCH/configs"
           for candidate in lisa_defconfig lisa_stock_defconfig vendor/lisa_defconfig vendor/lahaina-qgki_defconfig; do
             if [ -f "$CONFIGS_DIR/$candidate" ]; then
-              echo "Found: $candidate"
               echo "DEFCONFIG=$candidate" >> $GITHUB_ENV
               break
             fi
@@ -132,7 +126,6 @@ jobs:
           curl -LSs \
             "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/${{ inputs.resukisu_branch }}/kernel/setup.sh" \
             | bash -
-          echo "ReSukiSU integrated"
 
       - name: Patch defconfig
         run: |
@@ -149,10 +142,8 @@ jobs:
 
           if [ "${{ inputs.use_susfs }}" = "true" ]; then
             echo "CONFIG_KSU_SUSFS=y" >> "$DEFCONFIG_FILE"
-            echo "Mode: SUSFS"
           else
             echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$DEFCONFIG_FILE"
-            echo "Mode: Manual Hook"
           fi
 
       - name: Apply manual hooks
@@ -176,88 +167,61 @@ jobs:
 
           echo "Fixing known Clang build errors..."
 
-          # Fix 1: Export sel_handle_status_ops (ReSukiSU requirement)
+          # Fix 1: Export sel_handle_status_ops (remove static)
           SELINUXFS="security/selinux/selinuxfs.c"
           if [ -f "$SELINUXFS" ]; then
-            if grep -q "static const struct file_operations sel_handle_status_ops" "$SELINUXFS"; then
-              sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' "$SELINUXFS"
-              echo "  Fixed: sel_handle_status_ops exported (removed static)"
-            else
-              echo "  sel_handle_status_ops: pattern not found or already exported"
-            fi
+            sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' "$SELINUXFS"
+            echo "  Fixed: sel_handle_status_ops exported"
           fi
 
-          # Fix 2: rmnet_ipa.c enum conversion (direct C cast)
+          # Fix 2: Export write_op (remove static + add EXPORT_SYMBOL)
+          if [ -f "$SELINUXFS" ]; then
+            # Remove static from write_op array
+            sed -i 's/^static ssize_t (\*write_op\[\])/ssize_t (*write_op[])/' "$SELINUXFS"
+            # If that pattern didn't match, try alternate
+            sed -i 's/^static ssize_t (\*sel_write_op\[\])/ssize_t (*sel_write_op[])/' "$SELINUXFS"
+            # Add EXPORT if not present
+            if ! grep -q "EXPORT_SYMBOL.*write_op" "$SELINUXFS"; then
+              # Find the end of write_op array and add export after it
+              awk '/^(ssize_t \(\*write_op|static ssize_t \(\*write_op)/{found=1} found && /^};/{print; print "EXPORT_SYMBOL_GPL(write_op);"; found=0; next} {print}' "$SELINUXFS" > "${SELINUXFS}.tmp" && mv "${SELINUXFS}.tmp" "$SELINUXFS"
+            fi
+            echo "  Fixed: write_op exported"
+          fi
+
+          # Fix 3: rmnet_ipa.c enum conversion
           RMNET_IPA="techpack/dataipa/drivers/platform/msm/ipa/ipa_v3/rmnet_ipa.c"
           if [ -f "$RMNET_IPA" ]; then
             sed -i 's/q6_ul_flt_rule_ptr->ip = flt_spec_ptr->ip_type;/q6_ul_flt_rule_ptr->ip = (enum ipa_ip_type)flt_spec_ptr->ip_type;/' "$RMNET_IPA"
             sed -i 's/q6_ul_flt_rule_ptr->action = flt_spec_ptr->filter_action;/q6_ul_flt_rule_ptr->action = (enum ipa_flt_action)flt_spec_ptr->filter_action;/' "$RMNET_IPA"
-            echo "  Fixed: rmnet_ipa.c enum casts"
           fi
-
-          # Backup Makefile flag
           DATAIPA_MK="techpack/dataipa/drivers/platform/msm/ipa/ipa_v3/Makefile"
-          if [ -f "$DATAIPA_MK" ]; then
-            grep -q "Wno-enum-conversion" "$DATAIPA_MK" ||               echo "ccflags-y += -Wno-enum-conversion" >> "$DATAIPA_MK"
-          fi
+          [ -f "$DATAIPA_MK" ] && grep -q "Wno-enum-conversion" "$DATAIPA_MK" || echo "ccflags-y += -Wno-enum-conversion" >> "$DATAIPA_MK" 2>/dev/null
 
-          # Fix 3: tcp_timer.c bit-field truncation
+          # Fix 4: tcp_timer.c bit-field truncation
           TCP_TIMER="net/ipv4/tcp_timer.c"
-          if [ -f "$TCP_TIMER" ]; then
-            sed -i 's/icsk->icsk_mtup\.enabled = 1;/icsk->icsk_mtup.enabled = !!1;/g' "$TCP_TIMER"
-            echo "  Fixed: tcp_timer.c bit-field (!!1)"
-          fi
-
+          [ -f "$TCP_TIMER" ] && sed -i 's/icsk->icsk_mtup\.enabled = 1;/icsk->icsk_mtup.enabled = !!1;/g' "$TCP_TIMER"
           NET_IPV4_MK="net/ipv4/Makefile"
-          if [ -f "$NET_IPV4_MK" ]; then
-            grep -q "Wno-single-bit-bitfield" "$NET_IPV4_MK" ||               echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$NET_IPV4_MK"
-          fi
+          [ -f "$NET_IPV4_MK" ] && grep -q "Wno-single-bit-bitfield" "$NET_IPV4_MK" || echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$NET_IPV4_MK" 2>/dev/null
 
-          # Fix 4: sde_hw_dsc_1_2.c missing return type (-Wimplicit-int)
+          # Fix 5: sde_hw_dsc_1_2.c missing return type
           DSC_FILE="techpack/display/msm/sde/sde_hw_dsc_1_2.c"
-          if [ -f "$DSC_FILE" ]; then
-            sed -i 's/static inline _dsc_subblk_offset/static inline int _dsc_subblk_offset/' "$DSC_FILE"
-            echo "  Fixed: sde_hw_dsc_1_2.c missing return type"
-          fi
-
-          # Fallback: suppress -Wimplicit-int in display techpack
+          [ -f "$DSC_FILE" ] && sed -i 's/static inline _dsc_subblk_offset/static inline int _dsc_subblk_offset/' "$DSC_FILE"
           for MK in $(find techpack/display/ -name "Makefile" 2>/dev/null); do
-            grep -q "Wno-implicit-int" "$MK" ||               echo "ccflags-y += -Wno-implicit-int" >> "$MK"
+            grep -q "Wno-implicit-int" "$MK" || echo "ccflags-y += -Wno-implicit-int" >> "$MK"
           done
 
-          # Fix 5: msm_ion.c enum comparison (-Wenum-compare)
+          # Fix 6: msm_ion.c enum comparison
           ION_HEAPS_MK="drivers/staging/android/ion/heaps/Makefile"
-          if [ -f "$ION_HEAPS_MK" ]; then
-            grep -q "Wno-enum-compare" "$ION_HEAPS_MK" ||               echo "ccflags-y += -Wno-enum-compare" >> "$ION_HEAPS_MK"
-            echo "  Fixed: msm_ion.c enum comparison"
-          fi
+          [ -f "$ION_HEAPS_MK" ] && grep -q "Wno-enum-compare" "$ION_HEAPS_MK" || echo "ccflags-y += -Wno-enum-compare" >> "$ION_HEAPS_MK" 2>/dev/null
 
-          # Fix 6: usbdtp.c bit-field truncation
+          # Fix 7: usbdtp.c bit-field truncation
           USB_MISC_MK="drivers/usb/misc/Makefile"
-          if [ -f "$USB_MISC_MK" ]; then
-              grep -q "Wno-single-bit-bitfield" "$USB_MISC_MK" || \
-                echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$USB_MISC_MK"
-          fi
-          
-          # Fix 7: parser_api.c array parameter mismatch (qcacld WiFi)
-          QCACLD_MK="drivers/staging/qcacld-3.0/Kbuild"
-          if [ -f "$QCACLD_MK" ]; then
-              grep -q "Wno-array-parameter" "$QCACLD_MK" || \
-                echo "ccflags-y += -Wno-array-parameter" >> "$QCACLD_MK"
-          fi
-          # Fix 8: Export write_op (remove 'static' from selinuxfs.c)
-          SELINUXFS="security/selinux/selinuxfs.c"
-          if [ -f "$SELINUXFS" ]; then
-              sed -i 's/static const struct seq_operations sel_avc_cache_stats_seq_ops/const struct seq_operations sel_avc_cache_stats_seq_ops/' "$SELINUXFS" 2>/dev/null
-              # Export write_op - remove static keyword
-              sed -i 's/^static ssize_t sel_write_op/ssize_t sel_write_op/' "$SELINUXFS"
-              sed -i 's/^static const struct file_operations transaction_ops/const struct file_operations transaction_ops/' "$SELINUXFS"
-          fi
-          
-          # Fix 9: Backport path_umount (already in apply_hooks.sh optional patches)
-          # OR: run apply_hooks.sh with --optional flag to include path_umount backport
+          [ -f "$USB_MISC_MK" ] && grep -q "Wno-single-bit-bitfield" "$USB_MISC_MK" || echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$USB_MISC_MK" 2>/dev/null
 
-          echo ""
+          # Fix 8: qcacld parser_api.c array parameter
+          QCACLD_MK="drivers/staging/qcacld-3.0/Kbuild"
+          [ -f "$QCACLD_MK" ] && grep -q "Wno-array-parameter" "$QCACLD_MK" || echo "ccflags-y += -Wno-array-parameter" >> "$QCACLD_MK" 2>/dev/null
+
           echo "All build fixes applied!"
 
       - name: Set up ccache
@@ -286,27 +250,18 @@ jobs:
             O=out
           )
 
-          echo "Config: $DEFCONFIG"
-          echo "Clang: $(clang --version 2>/dev/null | head -1 || echo 'unknown')"
           make "${MAKE_ARGS[@]}" $DEFCONFIG
-
-          # Force KALLSYMS_ALL after defconfig processing
           scripts/config --file out/.config -e KALLSYMS_ALL
           make "${MAKE_ARGS[@]}" olddefconfig
 
-          # Verify critical configs
-          echo "--- Critical config check ---"
           grep -E "CONFIG_KSU|CONFIG_KALLSYMS_ALL" out/.config || true
 
-          echo "Building..."
           make "${MAKE_ARGS[@]}" -j$(nproc --all) 2>&1 | tee build.log
 
           if [ -f out/arch/$ARCH/boot/Image ]; then
-            echo "Build successful!"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
             ls -lh out/arch/$ARCH/boot/Image
           else
-            echo "Build failed!"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
             tail -80 build.log
             exit 1
