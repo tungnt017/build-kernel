@@ -59,29 +59,61 @@ jobs:
             libelf-dev liblz4-tool libsdl1.2-dev libssl-dev \
             libxml2 libxml2-utils lzop pngcrush rsync \
             schedtool squashfs-tools xsltproc zip zlib1g-dev \
-            python3 python-is-python3 lld
+            python3 python-is-python3 lld zstd
 
       # ══════════════════════════════════════════
       # Clang Toolchains
       # ══════════════════════════════════════════
-      - name: Clone Neutron Clang
+      - name: Setup Neutron Clang
         if: ${{ inputs.clang_version == 'neutron' }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/toolchain/clang
           cd $GITHUB_WORKSPACE/toolchain/clang
-          curl -LO "https://raw.githubusercontent.com/nickyraz/nickyraz.github.io/main/neutron-clang/antman.sh"
-          chmod +x antman.sh
-          bash antman.sh -S
-          echo "✅ Neutron Clang installed"
-          ls -la bin/clang 2>/dev/null && bin/clang --version | head -3 || true
 
-      - name: Clone Proton Clang
+          # Download antman from correct repo
+          curl -LSs "https://raw.githubusercontent.com/nickyraz/nickyraz.github.io/main/neutron-clang/antman" -o antman
+          chmod +x antman
+
+          # Sync latest Neutron Clang
+          ./antman -S
+
+          # Patch for Ubuntu 24.04 glibc compatibility
+          ./antman --patch=glibc || true
+
+          echo "✅ Neutron Clang installed"
+          ls bin/clang* 2>/dev/null | head -5 || true
+          bin/clang --version 2>/dev/null | head -3 || true
+
+      - name: Setup Neutron Clang (fallback)
+        if: ${{ inputs.clang_version == 'neutron' && failure() }}
+        run: |
+          echo "⚠️  antman failed, trying direct tarball download..."
+          mkdir -p $GITHUB_WORKSPACE/toolchain/clang
+          cd $GITHUB_WORKSPACE/toolchain/clang
+
+          # Direct download from Neutron releases
+          LATEST_URL=$(curl -s https://api.github.com/repos/nickyraz/nickyraz.github.io/releases/latest \
+            | grep "browser_download_url.*neutron-clang.*tar.zst" \
+            | head -1 | cut -d '"' -f 4)
+
+          if [ -n "$LATEST_URL" ]; then
+            wget -q "$LATEST_URL" -O neutron-clang.tar.zst
+            tar -I zstd -xf neutron-clang.tar.zst
+            rm neutron-clang.tar.zst
+            echo "✅ Neutron Clang installed (direct download)"
+          else
+            echo "❌ Could not find Neutron Clang release!"
+            exit 1
+          fi
+
+      - name: Setup Proton Clang
         if: ${{ inputs.clang_version == 'proton' }}
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git \
             $GITHUB_WORKSPACE/toolchain/clang
+          echo "✅ Proton Clang installed"
 
-      - name: Clone AOSP Clang
+      - name: Setup AOSP Clang
         if: ${{ inputs.clang_version == 'aosp' }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/toolchain/clang
@@ -89,6 +121,7 @@ jobs:
             -O /tmp/clang.tar.gz
           tar -xzf /tmp/clang.tar.gz -C $GITHUB_WORKSPACE/toolchain/clang
           rm /tmp/clang.tar.gz
+          echo "✅ AOSP Clang installed"
 
       - name: Clone GCC toolchains
         run: |
@@ -178,7 +211,7 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # Use system host tools to avoid libc incompatibility
+          # Use system host tools to avoid glibc/ld incompatibility
           MAKE_ARGS=(
             ARCH=$ARCH
             CC="ccache clang"
@@ -192,6 +225,7 @@ jobs:
           )
 
           echo "⚙️  Config: $DEFCONFIG"
+          echo "🔧 Clang: $(clang --version 2>/dev/null | head -1 || echo 'unknown')"
           make "${MAKE_ARGS[@]}" $DEFCONFIG
 
           echo "🔨 Building..."
