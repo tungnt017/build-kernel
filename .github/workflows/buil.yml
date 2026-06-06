@@ -69,17 +69,10 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/toolchain/clang
           cd $GITHUB_WORKSPACE/toolchain/clang
-
-          # Download antman from official Neutron-Toolchains repo
           curl -LSs "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman" -o antman
           chmod +x antman
-
-          # Sync latest Neutron Clang build
           ./antman -S
-
-          # Patch for Ubuntu 24.04 glibc compatibility
           ./antman --patch=glibc || true
-
           echo "✅ Neutron Clang installed"
           bin/clang --version 2>/dev/null | head -3 || true
 
@@ -162,9 +155,6 @@ jobs:
             echo "🪝 Mode: Manual Hook"
           fi
 
-          echo "--- defconfig tail ---"
-          tail -8 "$DEFCONFIG_FILE"
-
       - name: Apply manual hooks
         if: ${{ inputs.use_susfs != true }}
         run: |
@@ -180,38 +170,40 @@ jobs:
       # ══════════════════════════════════════════
       # Fix known Clang build errors
       # ══════════════════════════════════════════
-      - name: Fix Clang build warnings/errors
+      - name: Fix Clang build errors
         run: |
           cd $GITHUB_WORKSPACE/kernel
 
-          echo "🔧 Fixing known build errors for Clang..."
+          echo "🔧 Fixing known Clang build errors..."
 
-          # Fix 1: rmnet_ipa.c — enum conversion error in techpack/dataipa
+          # ── Fix 1: rmnet_ipa.c — enum conversion (direct source patch) ──
+          RMNET_IPA="techpack/dataipa/drivers/platform/msm/ipa/ipa_v3/rmnet_ipa.c"
+          if [ -f "$RMNET_IPA" ]; then
+            # Cast enum assignments explicitly
+            sed -i 's/q6_ul_flt_rule_ptr->ip = flt_spec_ptr->ip_type;/q6_ul_flt_rule_ptr->ip = (enum ipa_ip_type)flt_spec_ptr->ip_type;/' "$RMNET_IPA"
+            sed -i 's/q6_ul_flt_rule_ptr->action = flt_spec_ptr->filter_action;/q6_ul_flt_rule_ptr->action = (enum ipa_flt_action)flt_spec_ptr->filter_action;/' "$RMNET_IPA"
+            echo "  ✅ Fixed: rmnet_ipa.c enum casts"
+          fi
+
+          # Backup: also add Makefile flag
           DATAIPA_MK="techpack/dataipa/drivers/platform/msm/ipa/ipa_v3/Makefile"
           if [ -f "$DATAIPA_MK" ]; then
-            if ! grep -q "Wno-enum-conversion" "$DATAIPA_MK"; then
+            grep -q "Wno-enum-conversion" "$DATAIPA_MK" || \
               echo "ccflags-y += -Wno-enum-conversion" >> "$DATAIPA_MK"
-              echo "  ✅ Fixed: rmnet_ipa enum conversion (-Wno-enum-conversion)"
-            fi
           fi
 
-          # Fix 2: tcp_timer.c — bit-field truncation in net/ipv4
+          # ── Fix 2: tcp_timer.c — bit-field truncation ──
           TCP_TIMER="net/ipv4/tcp_timer.c"
           if [ -f "$TCP_TIMER" ]; then
-            if grep -q "icsk->icsk_mtup.enabled = 1;" "$TCP_TIMER"; then
-              sed -i 's/icsk->icsk_mtup.enabled = 1;/icsk->icsk_mtup.enabled = !!1;/' "$TCP_TIMER"
-              echo "  ✅ Fixed: tcp_timer bit-field truncation (!!1)"
-            fi
+            sed -i 's/icsk->icsk_mtup\.enabled = 1;/icsk->icsk_mtup.enabled = !!1;/g' "$TCP_TIMER"
+            echo "  ✅ Fixed: tcp_timer.c bit-field (!!1)"
           fi
 
-          # Fix 3: Suppress additional Clang warnings that break -Werror builds
-          # Add global flags if needed
+          # Backup: suppress at Makefile level too
           NET_IPV4_MK="net/ipv4/Makefile"
           if [ -f "$NET_IPV4_MK" ]; then
-            if ! grep -q "Wno-single-bit-bitfield-constant-conversion" "$NET_IPV4_MK"; then
+            grep -q "Wno-single-bit-bitfield" "$NET_IPV4_MK" || \
               echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$NET_IPV4_MK"
-              echo "  ✅ Fixed: net/ipv4 bitfield warning suppressed"
-            fi
           fi
 
           echo ""
@@ -246,6 +238,14 @@ jobs:
           echo "⚙️  Config: $DEFCONFIG"
           echo "🔧 Clang: $(clang --version 2>/dev/null | head -1 || echo 'unknown')"
           make "${MAKE_ARGS[@]}" $DEFCONFIG
+
+          # Force KALLSYMS_ALL after defconfig (in case Kconfig overrides it)
+          scripts/config --file out/.config -e KALLSYMS_ALL
+          make "${MAKE_ARGS[@]}" olddefconfig
+
+          # Verify critical configs
+          echo "--- Critical config check ---"
+          grep -E "CONFIG_KSU|CONFIG_KALLSYMS_ALL" out/.config || true
 
           echo "🔨 Building..."
           make "${MAKE_ARGS[@]}" -j$(nproc --all) 2>&1 | tee build.log
