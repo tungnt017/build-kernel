@@ -176,35 +176,54 @@ jobs:
 
           echo "🔧 Fixing known Clang build errors..."
 
-          # ── Fix 1: rmnet_ipa.c — enum conversion (direct source patch) ──
+          # ── Fix 1: Export sel_handle_status_ops (ReSukiSU requirement) ──
+          SELINUXFS="security/selinux/selinuxfs.c"
+          if [ -f "$SELINUXFS" ]; then
+            if grep -q "static const struct file_operations sel_handle_status_ops" "$SELINUXFS"; then
+              sed -i 's/static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' "$SELINUXFS"
+              echo "  ✅ Fixed: sel_handle_status_ops exported (removed static)"
+            else
+              echo "  ⏭️  sel_handle_status_ops: pattern not found or already exported"
+            fi
+          fi
+
+          # ── Fix 2: rmnet_ipa.c — enum conversion (direct C cast) ──
           RMNET_IPA="techpack/dataipa/drivers/platform/msm/ipa/ipa_v3/rmnet_ipa.c"
           if [ -f "$RMNET_IPA" ]; then
-            # Cast enum assignments explicitly
             sed -i 's/q6_ul_flt_rule_ptr->ip = flt_spec_ptr->ip_type;/q6_ul_flt_rule_ptr->ip = (enum ipa_ip_type)flt_spec_ptr->ip_type;/' "$RMNET_IPA"
             sed -i 's/q6_ul_flt_rule_ptr->action = flt_spec_ptr->filter_action;/q6_ul_flt_rule_ptr->action = (enum ipa_flt_action)flt_spec_ptr->filter_action;/' "$RMNET_IPA"
             echo "  ✅ Fixed: rmnet_ipa.c enum casts"
           fi
 
-          # Backup: also add Makefile flag
+          # Backup Makefile flag
           DATAIPA_MK="techpack/dataipa/drivers/platform/msm/ipa/ipa_v3/Makefile"
           if [ -f "$DATAIPA_MK" ]; then
-            grep -q "Wno-enum-conversion" "$DATAIPA_MK" || \
-              echo "ccflags-y += -Wno-enum-conversion" >> "$DATAIPA_MK"
+            grep -q "Wno-enum-conversion" "$DATAIPA_MK" ||               echo "ccflags-y += -Wno-enum-conversion" >> "$DATAIPA_MK"
           fi
 
-          # ── Fix 2: tcp_timer.c — bit-field truncation ──
+          # ── Fix 3: tcp_timer.c — bit-field truncation ──
           TCP_TIMER="net/ipv4/tcp_timer.c"
           if [ -f "$TCP_TIMER" ]; then
             sed -i 's/icsk->icsk_mtup\.enabled = 1;/icsk->icsk_mtup.enabled = !!1;/g' "$TCP_TIMER"
             echo "  ✅ Fixed: tcp_timer.c bit-field (!!1)"
           fi
 
-          # Backup: suppress at Makefile level too
           NET_IPV4_MK="net/ipv4/Makefile"
           if [ -f "$NET_IPV4_MK" ]; then
-            grep -q "Wno-single-bit-bitfield" "$NET_IPV4_MK" || \
-              echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$NET_IPV4_MK"
+            grep -q "Wno-single-bit-bitfield" "$NET_IPV4_MK" ||               echo "ccflags-y += -Wno-single-bit-bitfield-constant-conversion" >> "$NET_IPV4_MK"
           fi
+
+          # ── Fix 4: sde_hw_dsc_1_2.c — missing return type (-Wimplicit-int) ──
+          DSC_FILE="techpack/display/msm/sde/sde_hw_dsc_1_2.c"
+          if [ -f "$DSC_FILE" ]; then
+            sed -i 's/static inline _dsc_subblk_offset/static inline int _dsc_subblk_offset/' "$DSC_FILE"
+            echo "  ✅ Fixed: sde_hw_dsc_1_2.c missing return type"
+          fi
+
+          # Fallback: suppress -Wimplicit-int in display techpack
+          for MK in $(find techpack/display/ -name "Makefile" 2>/dev/null); do
+            grep -q "Wno-implicit-int" "$MK" ||               echo "ccflags-y += -Wno-implicit-int" >> "$MK"
+          done
 
           echo ""
           echo "✅ All build fixes applied!"
@@ -239,7 +258,7 @@ jobs:
           echo "🔧 Clang: $(clang --version 2>/dev/null | head -1 || echo 'unknown')"
           make "${MAKE_ARGS[@]}" $DEFCONFIG
 
-          # Force KALLSYMS_ALL after defconfig (in case Kconfig overrides it)
+          # Force KALLSYMS_ALL after defconfig processing
           scripts/config --file out/.config -e KALLSYMS_ALL
           make "${MAKE_ARGS[@]}" olddefconfig
 
@@ -290,10 +309,8 @@ jobs:
           AKEOF
 
           cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image .
-          find $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dts \
-            -name "*.dtb" -exec cp {} dtb \; 2>/dev/null || true
-          [ -f "$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dtbo.img" ] && \
-            cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dtbo.img . || true
+          find $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dts             -name "*.dtb" -exec cp {} dtb \; 2>/dev/null || true
+          [ -f "$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dtbo.img" ] &&             cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/dtbo.img . || true
 
           DATE=$(date +%Y%m%d-%H%M)
           MODE="${{ inputs.use_susfs == true && 'SUSFS' || 'ManualHook' }}"
